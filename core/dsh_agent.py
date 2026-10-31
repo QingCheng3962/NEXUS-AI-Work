@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from . import approval, llm, runtime, settings
+from . import approval, llm, runtime, security, settings
 
 _READ_LIMIT = 4 * 1024 * 1024
 
@@ -56,11 +56,11 @@ class DSHAgent:
                 [str(node), "--version"],
                 capture_output=True,
                 text=True,
-                timeout=8,
+                timeout=security.command_timeout_seconds(),
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             return out.stdout.strip()
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             return ""
 
     def dsh_version(self) -> str:
@@ -102,10 +102,10 @@ class DSHAgent:
         package = settings.get("dsh.package", "@deepseek-ai/dsh")
         return [npx, "-y", package], False
 
-    def _patch_file(self) -> Path | None:
+    def _patch_file(self, model: str | None = None) -> Path | None:
         cfg = settings.load().get("dsh", {})
         lines: list[str] = []
-        model = (cfg.get("model") or "").strip()
+        model = str(model or cfg.get("model") or "").strip()
         if model:
             lines += [
                 "- id: agent-default-model",
@@ -128,7 +128,7 @@ class DSHAgent:
         plugin = approval.broker.plugin_path()
         lines += [
             "- insert:",
-            "    - id: nexus-approval",
+            "    - id: anvil-approval",
             f"      name: {json.dumps(plugin.as_uri())}",
             "      config: {}",
         ]
@@ -147,7 +147,7 @@ class DSHAgent:
             env["DEEPSEEK_API_KEY"] = key
 
         # DSH 使用 Anthropic Messages 兼容端点；留空时交给 DSH 使用其官方
-        # 默认地址，不能复用 NEXUS 普通对话的 OpenAI 兼容 Base URL。
+        # 默认地址，不能复用 Anvil 普通对话的 OpenAI 兼容 Base URL。
         base_url = (cfg["dsh"].get("base_url") or "").strip()
         if base_url:
             env["DEEPSEEK_BASE_URL"] = base_url.rstrip("/")
@@ -156,28 +156,23 @@ class DSHAgent:
         if home:
             env["DSH_HOME"] = str(Path(home).expanduser())
 
-        mode = permission or (cfg["dsh"].get("permission") or "read-only")
-        mode = (
-            mode
-            if mode in ("read-only", "workspace-write", "danger-full-access")
-            else "read-only"
+        mode = security.permission_mode(
+            permission or (cfg["dsh"].get("permission") or "read-only")
         )
         env["DSH_PERMISSION_MODE"] = mode
-        env["NEXUS_APPROVAL_URL"] = approval.broker.url()
-        env["NEXUS_APPROVAL_TOKEN"] = approval.broker.token
-        env["NEXUS_APPROVAL_ENABLED"] = "1" if mode == "workspace-write" else "0"
+        env["ANVIL_APPROVAL_URL"] = approval.broker.url()
+        env["ANVIL_APPROVAL_TOKEN"] = approval.broker.token
+        env["ANVIL_APPROVAL_ENABLED"] = "1" if mode == "workspace-write" else "0"
         env["NO_COLOR"] = "1"
         return env
 
     def workspace(self) -> Path:
-        path = Path(settings.get("dsh.workspace") or settings.WORKSPACE_DIR).expanduser()
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        return security.workspace_root(settings.get("dsh.workspace") or settings.WORKSPACE_DIR)
 
-    def _command(self, session_id: str | None = None) -> list[str]:
+    def _command(self, session_id: str | None = None, model: str | None = None) -> list[str]:
         base, bundled = self._base()
         argv = [*base]
-        patch = self._patch_file()
+        patch = self._patch_file(model)
         if patch:
             argv += ["--patch", str(patch)]
         argv += ["--profile", "headless", "--json"]
@@ -197,8 +192,13 @@ class DSHAgent:
         session_id: str | None = None,
         workspace: Path | None = None,
         permission: str = "read-only",
+        model: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        """运行一轮任务；逐条产出 DSH JSON 事件，末尾产出 `_exit`。"""
+        """运行一轮任务；逐条产出 DSH JSON 事件，末尾产出 `_exit`。
+
+        ``model`` 用于模型调度模式：每一轮可以指定不同的模型 ID。权限和
+        工作区在这里再次校验，避免绕过界面直接调用核心层。
+        """
         task = (task or "").strip()
         if not task:
             yield {"type": "error", "message": "任务内容不能为空"}
@@ -207,21 +207,29 @@ class DSHAgent:
             yield {"type": "error", "message": "已有 DSH 任务正在执行，请先停止。"}
             return
 
+        try:
+            workdir = security.ensure_workspace(workspace or self.workspace())
+            mode = security.permission_mode(permission)
+        except security.SecurityError as exc:
+            yield {"type": "error", "message": f"安全校验失败：{exc}"}
+            yield {"type": "_exit", "returncode": -1, "stderr": str(exc), "cancelled": False}
+            return
+
         self.busy = True
         self.cancelled = False
         self.last_error = ""
         stderr_lines: list[str] = []
-        workdir = workspace or self.workspace()
+        timed_out = False
 
         try:
-            argv = self._command(session_id)
+            argv = self._command(session_id, model)
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=str(workdir),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=self._env(permission),
+                env=self._env(mode),
                 limit=_READ_LIMIT,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
@@ -249,8 +257,20 @@ class DSHAgent:
                 proc.stdin.close()
 
                 assert proc.stdout is not None
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + security.task_timeout_seconds()
                 while True:
-                    line = await proc.stdout.readline()
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    try:
+                        line = await asyncio.wait_for(
+                            proc.stdout.readline(), timeout=remaining
+                        )
+                    except asyncio.TimeoutError:
+                        timed_out = True
+                        break
                     if not line:
                         break
                     text = line.decode("utf-8", "replace").strip()
@@ -262,16 +282,59 @@ class DSHAgent:
                         continue
                     if not isinstance(event, dict):
                         continue
+
+                    if event.get("type") == "tool_call":
+                        raw_input = event.get("input")
+                        parsed_input = raw_input
+                        if isinstance(raw_input, str):
+                            try:
+                                parsed_input = json.loads(raw_input)
+                            except json.JSONDecodeError:
+                                parsed_input = raw_input
+                        try:
+                            security.inspect_tool_call(
+                                str(event.get("tool") or ""),
+                                parsed_input,
+                                workdir,
+                                mode,
+                            )
+                        except security.SecurityError as exc:
+                            self.last_error = str(exc)
+                            yield {
+                                "type": "error",
+                                "message": f"安全拦截：{exc}",
+                            }
+                            await asyncio.to_thread(self._kill_process, proc)
+                            break
+
                     if event.get("type") == "session" and event.get("sessionId"):
                         self.session_id = str(event["sessionId"])
                     yield event
+
+                if timed_out:
+                    self.last_error = f"任务超过 {int(security.task_timeout_seconds())} 秒未完成，已强制终止。"
+                    await asyncio.to_thread(self._kill_process, proc)
+                    yield {"type": "error", "message": self.last_error}
             finally:
-                returncode = await proc.wait()
+                try:
+                    returncode = await asyncio.wait_for(proc.wait(), timeout=10)
+                except asyncio.TimeoutError:
+                    await asyncio.to_thread(self._kill_process, proc)
+                    try:
+                        returncode = await asyncio.wait_for(proc.wait(), timeout=5)
+                    except asyncio.TimeoutError:
+                        returncode = -1
                 await asyncio.gather(err_task, return_exceptions=True)
                 stderr = "\n".join(stderr_lines[-60:])
-                if returncode != 0 and stderr:
+                if returncode != 0 and stderr and not self.last_error:
                     self.last_error = stderr
-                yield {"type": "_exit", "returncode": returncode, "stderr": stderr, "cancelled": self.cancelled}
+                yield {
+                    "type": "_exit",
+                    "returncode": returncode,
+                    "stderr": stderr,
+                    "cancelled": self.cancelled,
+                    "timed_out": timed_out,
+                }
         except FileNotFoundError as exc:
             self.last_error = str(exc)
             yield {"type": "error", "message": str(exc)}
@@ -284,10 +347,9 @@ class DSHAgent:
             self.proc = None
             self.busy = False
 
-    def cancel(self) -> None:
-        self.cancelled = True
-        proc = self.proc
-        if not proc or proc.returncode is not None:
+    @staticmethod
+    def _kill_process(proc: asyncio.subprocess.Process) -> None:
+        if proc.returncode is not None:
             return
         try:
             if os.name == "nt":
@@ -300,7 +362,17 @@ class DSHAgent:
             else:
                 proc.terminate()
         except Exception:  # noqa: BLE001
-            pass
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def cancel(self) -> None:
+        self.cancelled = True
+        proc = self.proc
+        if not proc or proc.returncode is not None:
+            return
+        self._kill_process(proc)
 
 
 dsh_agent = DSHAgent()

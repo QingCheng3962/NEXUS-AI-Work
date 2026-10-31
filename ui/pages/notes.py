@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+from pathlib import Path
 
 from nicegui import ui
 
-from core import db
+from core import db, doc_ai, documents
 from ui.theme import empty_state, page_shell, time_ago
 
 DEFAULT_PREVIEW = "*在左侧输入内容，这里会实时预览 Markdown。*"
@@ -24,7 +26,7 @@ def _excerpt(text: str, limit: int = 130) -> str:
     return clean[:limit] + ("…" if len(clean) > limit else "")
 
 
-@ui.page("/notes", title="笔记 · NEXUS")
+@ui.page("/notes", title="笔记 · Anvil")
 def notes_page() -> None:
     content = page_shell("知识笔记", "Markdown 笔记 · 数据保存在本地", "notes")
     state = {"query": ""}
@@ -35,6 +37,11 @@ def notes_page() -> None:
                 "outlined dense clearable"
             ).classes("search")
             ui.space()
+            ui.button(
+                "导入文档", icon="upload_file", on_click=lambda: import_dialog.open()
+            ).props("flat no-caps").classes("soft-btn").tooltip(
+                "拖入 PDF / Word / Excel，让 AI 提取摘要并保存为笔记"
+            )
             ui.button("新建笔记", icon="add", on_click=lambda: open_editor()).props(
                 "unelevated no-caps"
             ).classes("gradient-btn")
@@ -156,5 +163,87 @@ def notes_page() -> None:
                 )
 
         dialog.open()
+
+    # ------------------------------------------------------------------ #
+    # 文档导入：拖入后提取文字，AI 摘要并保存笔记
+    # ------------------------------------------------------------------ #
+    with ui.dialog() as import_dialog, ui.card().classes("glass note-dialog"):
+        with ui.row().classes("w-full items-center justify-between"):
+            with ui.element("div"):
+                ui.label("导入文档").classes("dialog-title")
+                ui.label("支持 PDF / Word(.docx) / Excel(.xlsx) / 文本，最大 25 MB").classes(
+                    "dialog-sub"
+                )
+            ui.button(icon="close", on_click=import_dialog.close).props(
+                "flat round dense"
+            ).classes("icon-btn")
+        ui.label(
+            "把文件拖到下面的区域，Anvil 会读取正文、调用 AI 生成摘要，并保存成一条笔记。"
+            "AI 不可用时会保留原文摘录，方便稍后重试。"
+        ).classes("muted").style("font-size:11.5px;margin-top:12px;line-height:1.65")
+
+        upload_status = ui.label("等待文件…").classes("dim").style(
+            "font-size:11px;margin-top:8px"
+        )
+
+        async def handle_upload(event) -> None:
+            name = getattr(event.file, "name", "") or "document"
+            upload_status.set_text(f"正在读取 {name}…")
+            temp_path: Path | None = None
+            try:
+                data = await event.file.read()
+                temp_path = await asyncio.to_thread(documents.save_upload, name, data)
+                doc = await asyncio.to_thread(documents.extract_text, temp_path)
+                # 保留用户看到的原始文件名，而不是临时 UUID 文件名。
+                doc.source = Path(name).name or doc.source
+                doc.title = Path(doc.source).stem or doc.title
+                upload_status.set_text(
+                    f"已读取 {doc.chars} 字，正在调用 AI 生成摘要…"
+                )
+
+                async def progress(text: str) -> None:
+                    upload_status.set_text(text)
+
+                summary = ""
+                tag_text = "文档, AI摘要"
+                try:
+                    summary = await doc_ai.summarize(doc, progress=progress)
+                except Exception as exc:  # noqa: BLE001 - AI 失败仍保留原文摘录
+                    summary = (
+                        f"> AI 摘要暂不可用：{exc}\n\n"
+                        f"## 原文摘录\n\n{doc.text[:3000]}"
+                    )
+                    tag_text = "文档, 待总结"
+
+                note_id = await asyncio.to_thread(
+                    db.create_note,
+                    f"{doc.title} · 摘要",
+                    documents.note_markdown(doc, summary),
+                    tag_text,
+                )
+                import_dialog.close()
+                render()
+                saved = db.get_note(note_id)
+                if saved:
+                    open_editor(saved)
+                ui.notify("文档已保存为笔记", type="positive")
+            except Exception as exc:  # noqa: BLE001
+                upload_status.set_text(f"导入失败：{exc}")
+                ui.notify(f"导入失败：{exc}", type="negative")
+            finally:
+                if temp_path:
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+        ui.upload(
+            label="拖入或选择文档",
+            on_upload=handle_upload,
+            auto_upload=True,
+            max_file_size=documents.MAX_UPLOAD_BYTES,
+        ).props(
+            "accept=.pdf,.docx,.xlsx,.xlsm,.txt,.md,.csv flat bordered"
+        ).classes("upload-box w-full").style("margin-top:8px")
 
     render()

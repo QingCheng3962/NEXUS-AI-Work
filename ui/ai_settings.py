@@ -8,7 +8,7 @@ from typing import Callable
 
 from nicegui import ui
 
-from core import model_catalog, settings, system
+from core import model_catalog, model_router, security, settings, system
 
 REASONING_OPTIONS = {
     "默认": "",
@@ -28,6 +28,7 @@ class AISettingsDialog:
         self.detected_source = ""
         self.detecting = False
         self._model_select: ui.select | None = None
+        self._router_selects: dict[str, ui.select] = {}
         self._status_label: ui.label | None = None
         self._base_input: ui.input | None = None
         self._key_input: ui.input | None = None
@@ -104,6 +105,19 @@ class AISettingsDialog:
         self.models = models
         self.detected_source = model_catalog.source_id(base_arg, key_arg)
         self._apply_model_options(models)
+        suggestions = model_router.suggest_router_models(models)
+        for role, key in (
+            ("cheap", "cheap_model"),
+            ("strong", "strong_model"),
+            ("fallback", "fallback_model"),
+        ):
+            select = self._router_selects.get(role)
+            if select is not None and not str(select.value or "").strip() and suggestions.get(key):
+                select.value = suggestions[key]
+                try:
+                    select.update()
+                except RuntimeError:
+                    pass
         self._set_status(
             f"已检测到 {len(models)} 个模型，可直接从列表选择。", "ok"
         )
@@ -123,20 +137,22 @@ class AISettingsDialog:
         self.detecting = False
 
     def _apply_model_options(self, models: list[dict]) -> None:
-        select = self._model_select
-        if select is None:
-            return
-        options = model_catalog.select_options(models)
-        current = str(select.value or "").strip()
-        if current and current not in options:
-            options[current] = f"{current} · 当前 API 未返回"
-        try:
-            select.options = options
-            select.update()
-            if not current and models:
-                select.value = models[0]["id"]
-        except RuntimeError:
-            pass
+        selects = list(self._router_selects.values())
+        if self._model_select is not None:
+            selects.insert(0, self._model_select)
+        base_options = model_catalog.select_options(models)
+        for select in selects:
+            options = dict(base_options)
+            current = str(select.value or "").strip()
+            if current and current not in options:
+                options[current] = f"{current} · 当前 API 未返回"
+            try:
+                select.options = options
+                select.update()
+                if not current and models and select is self._model_select:
+                    select.value = models[0]["id"]
+            except RuntimeError:
+                pass
 
     # ------------------------------------------------------------------ #
     def _make_body(self):
@@ -159,6 +175,14 @@ class AISettingsDialog:
             initial_model = current_model
             if not initial_model and self.models:
                 initial_model = str(self.models[0].get("id") or "")
+
+            router_cfg = cfg.get("router") if isinstance(cfg.get("router"), dict) else {}
+            router_cfg = dict(router_cfg)
+            if self.models and not any(
+                str(router_cfg.get(key) or "").strip()
+                for key in ("cheap_model", "strong_model", "fallback_model")
+            ):
+                router_cfg.update(model_router.suggest_router_models(self.models))
 
             with ui.element("div").classes("ai-form").style("margin-top:14px"):
                 self._base_input = ui.input(
@@ -200,6 +224,29 @@ class AISettingsDialog:
                 self._status_label = ui.label(status).classes(
                     f"model-status full {kind}".strip()
                 )
+
+                with ui.element("div").classes("router-box full"):
+                    with ui.element("div").classes("w-full"):
+                        ui.label("调度模式模型").classes("setting-label")
+                        ui.label(
+                            "顶部切到「调度」后：闲聊走轻量模型，代码/文件任务走强模型；"
+                            "主力报余额不足时自动尝试备用模型。"
+                        ).classes("setting-desc")
+                    with ui.element("div").classes("router-grid"):
+                        self._router_selects = {}
+                        for role, label, value_key in (
+                            ("cheap", "轻量任务", "cheap_model"),
+                            ("strong", "强模型任务", "strong_model"),
+                            ("fallback", "备用降级", "fallback_model"),
+                        ):
+                            select = ui.select(
+                                options,
+                                label=label,
+                                value=(router_cfg.get(value_key) or None),
+                                with_input=True,
+                                new_value_mode="add-unique",
+                            ).props("outlined dense options-dense").classes("w-full")
+                            self._router_selects[role] = select
 
                 effort = ui.select(
                     list(REASONING_OPTIONS),
@@ -255,10 +302,9 @@ class AISettingsDialog:
 
             def save() -> None:
                 path_text = (workspace.value or str(settings.WORKSPACE_DIR)).strip()
-                path = Path(path_text).expanduser()
                 try:
-                    path.mkdir(parents=True, exist_ok=True)
-                except OSError as exc:
+                    path = security.workspace_root(path_text)
+                except (OSError, security.SecurityError) as exc:
                     ui.notify(f"无法使用这个工作区：{exc}", type="negative")
                     return
 
@@ -272,6 +318,16 @@ class AISettingsDialog:
                 old_base = (cfg.get("base_url") or "").strip()
                 old_key = (cfg.get("api_key") or "").strip()
                 connection_changed = new_base != old_base or new_key != old_key
+                router_values = {
+                    key: str((self._router_selects.get(role).value if self._router_selects.get(role) else "") or "").strip()
+                    for role, key in (
+                        ("cheap", "cheap_model"),
+                        ("strong", "strong_model"),
+                        ("fallback", "fallback_model"),
+                    )
+                }
+                if self.models and not any(router_values.values()):
+                    router_values.update(model_router.suggest_router_models(self.models))
 
                 settings.update(
                     {
@@ -284,6 +340,7 @@ class AISettingsDialog:
                             ),
                             "workspace": str(path),
                             "use_stored_credentials": bool(stored.value),
+                            "router": router_values,
                         }
                     }
                 )

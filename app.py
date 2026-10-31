@@ -1,4 +1,4 @@
-"""NEXUS · AI 个人工作站
+"""Anvil · AI 个人工作站
 
 启动：
     python app.py
@@ -13,7 +13,7 @@ import sys
 
 from nicegui import app, ui
 
-from core import db, runtime, settings
+from core import db, runtime, settings, snapshots
 from core.approval import broker as approval_broker
 from core.approval import install_route
 from core.dsh_agent import dsh_agent
@@ -21,7 +21,7 @@ from core.dsh_agent import dsh_agent
 # 导入页面模块即完成路由注册
 from ui.pages import chat, notes, settings_page, tasks  # noqa: F401
 
-APP_TITLE = "NEXUS · AI 个人工作站"
+APP_TITLE = "Anvil · AI 个人工作站"
 
 install_route(app)
 
@@ -30,6 +30,10 @@ install_route(app)
 def _startup() -> None:
     settings.load()
     db.init_db()
+    try:
+        snapshots.prune(days=7)
+    except OSError:
+        pass
 
 
 @app.on_shutdown
@@ -65,18 +69,20 @@ def main() -> None:
         host = "127.0.0.1"
 
     approval_broker.port = port
+    icon = runtime.app_dir() / "assets" / "anvil.png"
+    favicon = str(icon) if icon.exists() else "🚀"
 
     ui.run(
         host=host,
         port=port,
         title=APP_TITLE,
-        favicon="🚀",
+        favicon=favicon,
         dark=None,
         show=not args.no_browser and not use_native,
         native=use_native,
         window_size=(1440, 900) if use_native else None,
         reload=args.reload and not use_native and not runtime.IS_FROZEN,
-        storage_secret=os.environ.get("NEXUS_STORAGE_SECRET", "nexus-local-workstation-2026"),
+        storage_secret=os.environ.get("ANVIL_STORAGE_SECRET", "anvil-local-workstation-2026"),
         uvicorn_logging_level="warning",
         language="zh-CN",
     )
@@ -87,7 +93,7 @@ def _ensure_streams() -> None:
     if sys.stdout is not None and sys.stderr is not None:
         return
     try:
-        log_path = runtime.support_dir() / "nexus.log"
+        log_path = runtime.support_dir() / "anvil.log"
         handle = open(log_path, "a", encoding="utf-8", buffering=1)
     except OSError:
         return
@@ -115,8 +121,8 @@ def _entry() -> None:
 
             ctypes.windll.user32.MessageBoxW(
                 0,
-                f"NEXUS 启动失败，请把日志发给开发者：\n{log_path}",
-                "NEXUS",
+                f"Anvil 启动失败，请把日志发给开发者：\n{log_path}",
+                "Anvil",
                 0x10,
             )
         else:

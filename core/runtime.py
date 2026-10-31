@@ -1,7 +1,7 @@
 """运行时路径解析：兼容源码运行与 PyInstaller 打包后的 EXE。
 
 - 资源（内置 DSH / Node）从 PyInstaller 的 `_MEIPASS` 读取
-- 用户数据优先放在 exe 同级的 `data/`，不可写时退回 %LOCALAPPDATA%\\NEXUS
+- 用户数据优先放在 exe 同级的 `data/`，不可写时退回 %LOCALAPPDATA%\\Anvil
 """
 
 from __future__ import annotations
@@ -41,14 +41,14 @@ def support_dir() -> Path:
     portable = app_dir() / "data"
     if _writable(portable):
         return portable
-    fallback = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "NEXUS" / "data"
+    fallback = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "Anvil" / "data"
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
 
 
 def default_workspace() -> Path:
     """DSH Agent 的默认工作区：独立的用户目录，避免误改程序源码。"""
-    path = Path.home() / "NEXUS-Workspace"
+    path = Path.home() / "Anvil-Workspace"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

@@ -80,7 +80,7 @@ def ensure_dsh() -> None:
 
 
 def main() -> None:
-    print("== NEXUS 内置运行时准备 ==")
+    print("== Anvil 内置运行时准备 ==")
     ensure_node()
     ensure_dsh()
     print("\n内置运行时已就绪：")

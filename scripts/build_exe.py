@@ -3,7 +3,7 @@
     python scripts/build_exe.py
     python scripts/build_exe.py --onefile   # 单文件（启动较慢，不推荐）
 
-产物：dist/NEXUS/NEXUS.exe
+产物：dist/Anvil/Anvil.exe
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DIST = ROOT / "dist" / "NEXUS"
+DIST = ROOT / "dist" / "Anvil"
 
 
 def main() -> None:
@@ -27,7 +27,7 @@ def main() -> None:
     subprocess.run([sys.executable, str(ROOT / "scripts" / "prepare_vendor.py")], check=True, cwd=str(ROOT))
 
     # 2. 图标
-    icon = ROOT / "assets" / "nexus.ico"
+    icon = ROOT / "assets" / "anvil.ico"
     if not icon.exists():
         subprocess.run([sys.executable, str(ROOT / "scripts" / "make_icon.py")], check=True, cwd=str(ROOT))
 
@@ -37,7 +37,7 @@ def main() -> None:
         "-m",
         "PyInstaller",
         "--name",
-        "NEXUS",
+        "Anvil",
         "--windowed",
         "--onedir" if not onefile else "--onefile",
         "--clean",
@@ -50,6 +50,12 @@ def main() -> None:
         "nicegui",
         "--collect-all",
         "webview",
+        "--collect-all",
+        "docx",
+        "--collect-all",
+        "openpyxl",
+        "--collect-all",
+        "pypdf",
         "--hidden-import",
         "webview.platforms.edgechromium",
         "--hidden-import",
@@ -69,7 +75,7 @@ def main() -> None:
     print(" ".join(command))
     subprocess.run(command, check=True, cwd=str(ROOT))
 
-    target = DIST / "NEXUS.exe"
+    target = DIST / "Anvil.exe"
     if not target.exists():
         raise SystemExit(f"构建结束但未找到 {target}")
 
@@ -84,7 +90,7 @@ def main() -> None:
     print("\n构建完成：")
     print(f"  {target}")
     print(f"  运行时目录：{DIST / '_internal'}")
-    print("  分发时请压缩整个 dist/NEXUS 目录。")
+    print("  分发时请压缩整个 dist/Anvil 目录。")
 
 
 if __name__ == "__main__":

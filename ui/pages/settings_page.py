@@ -17,7 +17,7 @@ from ui.theme import page_shell, panel
 EFFORT_LABELS = {"": "默认", "off": "关闭", "low": "低", "high": "高", "max": "最高"}
 
 
-@ui.page("/settings", title="设置 · NEXUS")
+@ui.page("/settings", title="设置 · Anvil")
 def settings_page() -> None:
     content = page_shell("设置", "配置模型、DSH Agent 与本地数据", "settings")
     cfg = settings.load()
@@ -161,7 +161,7 @@ def settings_page() -> None:
                             sanitize=False,
                         )
 
-                with panel("关于 NEXUS", "info", "AI 个人工作站"):
+                with panel("关于 Anvil", "info", "AI 个人工作站"):
                     with ui.element("div").classes("dsh-meta").style("flex-direction:column;gap:6px"):
                         ui.html("<span>界面 <code>NiceGUI 3.x</code> · 逻辑 <code>Python 3.10+</code></span>", sanitize=False)
                         ui.html("<span>Agent 运行时 <code>DeepSeek Harness · dsh</code></span>", sanitize=False)

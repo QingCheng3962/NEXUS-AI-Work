@@ -231,7 +231,7 @@ def parse_models(payload: Any) -> list[dict]:
 
 def _request_models(endpoint: str, key: str, token: str = "") -> list[dict]:
     variants: list[dict[str, str]] = []
-    base_headers = {"Accept": "application/json", "User-Agent": "NEXUS/1.0"}
+    base_headers = {"Accept": "application/json", "User-Agent": "Anvil/1.0"}
     if key:
         variants.append({**base_headers, "Authorization": f"Bearer {key}"})
         variants.append({**base_headers, "x-api-key": key})
@@ -333,11 +333,29 @@ def save_catalog(models: list[dict], base: str | None = None, key: str | None = 
             }
         }
     )
+    # 用当前 API 真实检测到的模型填充调度角色，绝不写死模型名。
+    try:
+        from . import model_router
+
+        model_router.bootstrap_router_models(models)
+    except Exception:  # noqa: BLE001 - 调度配置失败不应影响模型检测
+        pass
 
 
 def clear_catalog() -> None:
     settings.update(
-        {"dsh": {"models": [], "models_source": "", "models_checked_at": 0}}
+        {
+            "dsh": {
+                "models": [],
+                "models_source": "",
+                "models_checked_at": 0,
+                "router": {
+                    "cheap_model": "",
+                    "strong_model": "",
+                    "fallback_model": "",
+                },
+            }
+        }
     )
 
 

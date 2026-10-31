@@ -38,7 +38,7 @@ DEFAULTS: dict[str, Any] = {
             }
         ],
         "system_prompt": (
-            "你是「NEXUS」——运行在用户个人工作站里的 AI 助理。"
+            "你是「Anvil」——运行在用户个人工作站里的 AI 助理。"
             "回答要准确、简洁、有结构；涉及代码时优先给出可直接运行的方案。"
         ),
     },
@@ -55,6 +55,16 @@ DEFAULTS: dict[str, Any] = {
         "home": "",
         "use_stored_credentials": True,
         "package": "@deepseek-ai/dsh@0.2.1-rc.2",
+        "task_timeout": 300,
+        "command_timeout": 30,
+        "snapshot_enabled": True,
+        "snapshot_max_mb": 256,
+        "router": {
+            "mode": "direct",
+            "cheap_model": "",
+            "strong_model": "",
+            "fallback_model": "",
+        },
     },
 }
 
@@ -120,6 +130,24 @@ def load() -> dict[str, Any]:
         profiles = cfg["llm"].get("profiles") or []
         if profiles and not any(p.get("id") == cfg["llm"].get("active") for p in profiles):
             cfg["llm"]["active"] = profiles[0].get("id", "deepseek")
+
+        # 品牌迁移：旧版本的 NEXUS 默认工作区/提示词改为 Anvil（保留旧值用于迁移）。
+        old_prompt = str(cfg["llm"].get("system_prompt") or "")
+        if "NEXUS" in old_prompt:
+            cfg["llm"]["system_prompt"] = old_prompt.replace("NEXUS", "Anvil")
+            migrated = True
+        old_workspace = str(cfg["dsh"].get("workspace") or "").strip()
+        if old_workspace:
+            old_path = Path(old_workspace).expanduser()
+            if old_path.name.upper() in ("NEXUS-WORKSPACE", "ANVIL-WORKSPACE"):
+                new_path = old_path.with_name("Anvil-Workspace")
+                try:
+                    if old_path.exists() and not new_path.exists():
+                        old_path.rename(new_path)
+                    cfg["dsh"]["workspace"] = str(new_path)
+                except OSError:
+                    cfg["dsh"]["workspace"] = old_workspace
+                migrated = True
 
         # 首次运行时落盘，方便用户直接编辑
         if not CONFIG_FILE.exists() or migrated:

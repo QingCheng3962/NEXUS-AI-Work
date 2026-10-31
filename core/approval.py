@@ -2,7 +2,7 @@
 
 DSH 的 `ask` 策略在找不到 answerer 时会 fail-closed。headless 模式没有
 交互式客户端，因此这里注入一个很小的 Cordis 插件，让它通过本机 HTTP
-回连 NEXUS，由用户在 AI 工作窗口里决定是否允许一次敏感操作。
+回连 Anvil，由用户在 AI 工作窗口里决定是否允许一次敏感操作。
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ from . import settings
 
 PLUGIN_SOURCE = r"""
 export function apply(ctx) {
-  const url = process.env.NEXUS_APPROVAL_URL;
-  const token = process.env.NEXUS_APPROVAL_TOKEN;
-  if (!url || !token || process.env.NEXUS_APPROVAL_ENABLED !== '1') return;
+  const url = process.env.ANVIL_APPROVAL_URL;
+  const token = process.env.ANVIL_APPROVAL_TOKEN;
+  if (!url || !token || process.env.ANVIL_APPROVAL_ENABLED !== '1') return;
 
   ctx.on('approval/request', async (request, next) => {
     const controller = new AbortController();
@@ -32,7 +32,7 @@ export function apply(ctx) {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-nexus-approval-token': token,
+          'x-anvil-approval-token': token,
         },
         body: JSON.stringify({
           toolName: request.toolName || '',
@@ -63,7 +63,7 @@ class ApprovalBroker:
 
     def plugin_path(self) -> Path:
         if self._plugin is None:
-            path = settings.DATA_DIR / "nexus_dsh_approval.mjs"
+            path = settings.DATA_DIR / "anvil_dsh_approval.mjs"
             path.write_text(PLUGIN_SOURCE, encoding="utf-8")
             self._plugin = path
         return self._plugin
@@ -95,7 +95,7 @@ def install_route(fastapi_app) -> None:
 
     @fastapi_app.post("/api/dsh/approval")
     async def _dsh_approval(request: Request):
-        if request.headers.get("x-nexus-approval-token", "") != broker.token:
+        if request.headers.get("x-anvil-approval-token", "") != broker.token:
             return {"outcome": "unavailable"}
         try:
             payload = await request.json()

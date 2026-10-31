@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-NEXUS bundles or depends on the following open-source projects:
+Anvil bundles or depends on the following open-source projects:
 
 ## DeepSeek Harness (`@deepseek-ai/dsh`)
 

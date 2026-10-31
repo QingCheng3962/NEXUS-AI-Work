@@ -57,7 +57,15 @@ async def test_settings(user) -> None:
 
 
 async def test_work_send(user, monkeypatch, tmp_path, selected_model) -> None:
-    async def fake_stream(task, session_id=None, workspace=None, permission="read-only"):
+    await user.open("/")
+    await user.should_see("简易")
+    await user.should_see("调度")
+    await user.open("/notes")
+    await user.should_see("知识笔记")
+    await user.should_see("新建笔记")
+    await user.should_see("导入文档")
+
+    async def fake_stream(task, session_id=None, workspace=None, permission="read-only", model=None):
         yield {"type": "session", "sessionId": "fake-session"}
         yield {"type": "status", "phase": "step_start", "step": 1}
         yield {
@@ -95,7 +103,7 @@ async def test_work_send(user, monkeypatch, tmp_path, selected_model) -> None:
 
 
 async def test_read_write_approval(user, monkeypatch, tmp_path, selected_model) -> None:
-    async def fake_stream(task, session_id=None, workspace=None, permission="read-only"):
+    async def fake_stream(task, session_id=None, workspace=None, permission="read-only", model=None):
         yield {"type": "tool_call", "callId": "call-1", "tool": "pwsh", "input": "dir"}
         handler = approval.broker.handler
         allowed = await handler({"toolName": "pwsh", "reason": "需要在工作区外执行命令"})
@@ -129,3 +137,42 @@ async def test_read_write_approval(user, monkeypatch, tmp_path, selected_model) 
     latest = db.list_dsh_conversations(limit=1)
     if latest:
         db.delete_dsh_conversation(latest[0]["id"])
+
+
+async def test_snapshot_diff_and_undo(user, monkeypatch, tmp_path, selected_model) -> None:
+    from core import snapshots
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(snapshots, "SNAPSHOT_ROOT", tmp_path / "snapshots")
+    monkeypatch.setattr(dsh_agent, "available", lambda: True)
+    monkeypatch.setattr(dsh_agent, "has_stored_credentials", lambda: True)
+    monkeypatch.setattr(dsh_agent, "workspace", lambda: workspace)
+    monkeypatch.setattr(dsh_agent, "cancel", lambda: None)
+
+    async def fake_stream(task, session_id=None, workspace=None, permission="read-only", model=None):
+        (workspace / "created.txt").write_text("AI 新建的文件\n", encoding="utf-8")
+        yield {"type": "text", "text": "文件已创建。"}
+        yield {"type": "_exit", "returncode": 0, "stderr": "", "cancelled": False}
+
+    monkeypatch.setattr(dsh_agent, "stream", fake_stream)
+    previous_permission = settings.get("dsh.permission", "read-only")
+    settings.set_value("dsh.permission", "read-write")
+    try:
+        await user.open("/")
+        user.find(marker="chat-input").type("创建一个测试文件")
+        user.find(marker="chat-send").click()
+        await user.should_see("允许执行这次任务？")
+        user.find("允许并运行").click()
+        await user.should_see("文件已创建。", retries=30)
+        await asyncio.sleep(0.8)
+        assert (workspace / "created.txt").exists()
+        await user.should_see("AI 修改了工作区文件")
+        user.find("撤销全部").click()
+        await asyncio.sleep(0.8)
+        assert not (workspace / "created.txt").exists()
+    finally:
+        settings.set_value("dsh.permission", previous_permission)
+        latest = db.list_dsh_conversations(limit=1)
+        if latest:
+            db.delete_dsh_conversation(latest[0]["id"])

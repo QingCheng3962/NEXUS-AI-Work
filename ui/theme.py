@@ -13,6 +13,21 @@ from nicegui import ui
 from core import db, settings
 from core.dsh_agent import dsh_agent
 
+ANVIL_MARK_SVG = """
+<svg viewBox="0 0 16 16" width="22" height="22" aria-hidden="true">
+  <g fill="#cbd5e1">
+    <rect x="4" y="2" width="8" height="1"/>
+    <rect x="3" y="3" width="10" height="1"/>
+    <rect x="2" y="4" width="12" height="2"/>
+    <rect x="7" y="6" width="2" height="3"/>
+    <rect x="6" y="9" width="4" height="1"/>
+    <rect x="5" y="10" width="6" height="1"/>
+    <rect x="4" y="11" width="8" height="1"/>
+    <rect x="3" y="12" width="10" height="1"/>
+  </g>
+</svg>
+"""
+
 CSS = r"""
 :root {
   --ws-bg: #060a14;
@@ -665,9 +680,11 @@ body.body--light .ws-sidebar { background: var(--ws-bg-2); }
 .brand { padding: 4px 6px 14px; gap: 10px; }
 .brand-mark {
   width: 34px; height: 34px; border-radius: 10px;
-  background: var(--ws-primary); box-shadow: none;
+  background: rgba(148, 163, 184, .10); border: 1px solid var(--ws-border);
+  box-shadow: none;
 }
 .brand-mark .q-icon { font-size: 20px; }
+.brand-mark svg { display: block; width: 22px; height: 22px; }
 .brand-name { font-size: 15px; letter-spacing: .12em; }
 .brand-sub { font-size: 10px; }
 .new-chat-btn {
@@ -966,6 +983,35 @@ body.body--light .history-float { box-shadow: 0 18px 44px rgba(15, 23, 42, .14);
 }
 .model-status.ok { color: var(--ws-green); }
 .model-status.err { color: var(--ws-rose); }
+.router-box {
+  padding: 10px 11px; border: 1px solid var(--ws-border);
+  border-radius: 10px; background: rgba(148, 163, 184, .035);
+}
+.router-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.router-grid .q-field { font-size: 11px; }
+.diff-dialog { width: min(900px, 96vw); max-width: 900px; max-height: 88vh; padding: 20px 22px; }
+.diff-view {
+  margin-top: 10px; max-height: 52vh; overflow: auto; border: 1px solid var(--ws-border);
+  border-radius: 10px; background: #070c16;
+}
+.diff-pre {
+  margin: 0; padding: 12px 14px; font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+}
+.diff-line { display: block; padding: 0 4px; border-radius: 3px; }
+.diff-line.add { color: #86efac; background: rgba(34, 197, 94, .12); }
+.diff-line.del { color: #fda4af; background: rgba(244, 63, 94, .12); }
+.diff-line.hunk { color: #93c5fd; background: rgba(59, 130, 246, .10); margin-top: 4px; }
+.diff-line.meta { color: var(--ws-dim); }
+.diff-line.ctx { color: #94a3b8; }
+.diff-binary { padding: 18px; color: var(--ws-muted); font-size: 12px; }
+.upload-box { border: 1px dashed var(--ws-border-strong); border-radius: 12px; background: transparent !important; }
+.upload-box:hover { border-color: var(--ws-primary); }
+.upload-box .q-uploader__header { background: rgba(99, 102, 241, .10) !important; color: var(--ws-text) !important; }
+.upload-box .q-uploader__subtitle { color: var(--ws-dim) !important; }
+.upload-box .q-uploader__list { min-height: 110px; background: rgba(148, 163, 184, .03) !important; }
+.upload-box .q-uploader__header .q-btn { color: var(--ws-text); }
+.mode-toggle { flex: 0 0 auto; }
 .new-chat-top {
   background: var(--ws-primary) !important; color: #fff !important;
   min-height: 32px !important; padding: 0 13px !important;
@@ -1146,6 +1192,8 @@ body.history-open .history-pull .q-icon { color: var(--ws-primary); }
   .work-model { width: 145px; }
   .perm-note { display: none; }
   .work-page .msg-bubble { max-width: 91%; }
+  .router-grid { grid-template-columns: 1fr; }
+  .mode-toggle .q-btn { padding: 0 7px; }
   :root { --history-width: 330px; }
 }
 """
@@ -1286,9 +1334,9 @@ def _sidebar(active: str, dark) -> Callable[..., None]:
 
         with ui.element("div").classes("brand"):
             with ui.element("div").classes("brand-mark"):
-                ui.icon("hub")
+                ui.html(ANVIL_MARK_SVG, sanitize=False)
             with ui.element("div").classes("brand-text"):
-                ui.label("NEXUS").classes("brand-name")
+                ui.label("ANVIL").classes("brand-name")
                 ui.label("AI 工作站").classes("brand-sub")
 
         with ui.element("div").classes("sidebar-nav"):

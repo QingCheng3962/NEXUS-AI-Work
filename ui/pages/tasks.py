@@ -12,7 +12,7 @@ PRIORITY_OPTIONS = {"high": "高优先级", "normal": "中优先级", "low": "�
 FILTER_MAP = {"全部": "all", "进行中": "open", "已完成": "done"}
 
 
-@ui.page("/tasks", title="待办 · NEXUS")
+@ui.page("/tasks", title="待办 · Anvil")
 def tasks_page() -> None:
     content = page_shell("待办事项", "管理优先级，把精力放在重要的地方", "tasks")
     state = {"filter": "all"}

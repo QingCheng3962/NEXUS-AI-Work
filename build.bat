@@ -3,11 +3,11 @@ chcp 65001 >nul
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (
-    echo [NEXUS] 正在创建构建环境...
+    echo [Anvil] 正在创建构建环境...
     py -3.13 -m venv .venv
     if not exist ".venv\Scripts\python.exe" py -3 -m venv .venv
     if not exist ".venv\Scripts\python.exe" (
-        echo [NEXUS] 未找到 Python，请先安装 Python 3.10+（推荐 3.13）。
+        echo [Anvil] 未找到 Python，请先安装 Python 3.10+（推荐 3.13）。
         pause
         exit /b 1
     )
@@ -16,8 +16,8 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo.
-echo   NEXUS · 构建 Windows EXE
-echo   产物：dist\NEXUS\NEXUS.exe
+echo   Anvil · 构建 Windows EXE
+echo   产物：dist\Anvil\Anvil.exe
 echo.
 ".venv\Scripts\python.exe" scripts\prepare_vendor.py
 if errorlevel 1 goto :fail
@@ -26,7 +26,7 @@ if errorlevel 1 goto :fail
 
 echo.
 echo 构建完成，正在打开输出目录...
-explorer dist\NEXUS
+explorer dist\Anvil
 pause
 exit /b 0
 
