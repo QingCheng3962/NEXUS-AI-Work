@@ -45,6 +45,7 @@ DEFAULTS: dict[str, Any] = {
     "dsh": {
         "workspace": str(WORKSPACE_DIR),
         "model": "",
+        "active_provider_id": "",
         "models": [],
         "models_source": "",
         "models_checked_at": 0,

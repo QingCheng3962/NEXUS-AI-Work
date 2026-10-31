@@ -14,6 +14,7 @@ from urllib.parse import quote
 from nicegui import ui
 
 from core import (
+    ai_providers,
     approval,
     db,
     llm,
@@ -171,9 +172,14 @@ def chat_page() -> None:
                             return
 
                         current = (settings.get("dsh.model", "") or "").strip()
-                        options = model_catalog.select_options()
-                        if current and current not in options:
-                            options[current] = f"{current} · 未检测"
+                        detected = {
+                            f"model:{model_id}": label
+                            for model_id, label in model_catalog.select_options().items()
+                        }
+                        options = {**ai_providers.select_options(), **detected}
+                        if current and f"model:{current}" not in options:
+                            options[f"model:{current}"] = f"{current} · 未检测"
+                        selected = ai_providers.selected_value(current, detected)
                         if not options:
                             with ui.element("div").classes("work-model-empty").on(
                                 "click", lambda: ai_dialog.open()
@@ -181,15 +187,18 @@ def chat_page() -> None:
                                 ui.icon("travel_explore")
                                 ui.label("检测模型").classes("work-model-empty-label")
                             return
+
+                        def change_model(event) -> None:
+                            if ai_providers.apply_selection(str(event.value or "")):
+                                update_header()
+
                         ui.select(
                             options,
-                            value=current or None,
-                            on_change=lambda e: settings.set_value(
-                                "dsh.model", str(e.value or "")
-                            ),
+                            value=selected or None,
+                            on_change=change_model,
                         ).props("outlined dense options-dense").classes(
                             "work-model"
-                        ).tooltip("当前 API 自动检测到的模型")
+                        ).tooltip("切换已保存的 AI 服务商节点，或使用当前 API 检测到的模型")
 
                     mode_control()
                     model_control()

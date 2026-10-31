@@ -8,7 +8,7 @@ from pathlib import Path
 
 from nicegui import ui
 
-from core import db, doc_ai, documents
+from core import db, doc_ai, documents, reminders
 from ui.theme import empty_state, page_shell, time_ago
 
 DEFAULT_PREVIEW = "*在左侧输入内容，这里会实时预览 Markdown。*"
@@ -73,6 +73,10 @@ def notes_page() -> None:
                             with ui.element("div").classes("tag-row"):
                                 for tag in _tags(note["tags"])[:3]:
                                     ui.label(tag).classes("tag")
+                                if note.get("remind_at"):
+                                    with ui.element("div").classes("note-reminder"):
+                                        ui.icon("alarm")
+                                        ui.label(reminders.display_value(note["remind_at"]))
                             with ui.row().classes("items-center gap-1 no-wrap"):
                                 ui.label(time_ago(note["updated_at"])).classes("note-time")
                                 ui.button(
@@ -103,6 +107,10 @@ def notes_page() -> None:
                     tag_input = ui.input(
                         label="标签", value=note.get("tags", ""), placeholder="例如：工作, 灵感, 学习"
                     ).props("outlined dense").classes("w-full")
+                    remind_input = ui.input(
+                        label="提醒时间（可选）",
+                        value=reminders.input_value(note.get("remind_at", "")),
+                    ).props("outlined dense type=datetime-local clearable").classes("w-full")
                     content_input = ui.textarea(
                         label="正文", value=note.get("content", ""), placeholder="写点什么…"
                     ).props("outlined autogrow").classes("w-full").style("min-height:300px")
@@ -124,10 +132,15 @@ def notes_page() -> None:
                 title = (title_input.value or "").strip() or "未命名笔记"
                 body = content_input.value or ""
                 tags = tag_input.value or ""
+                try:
+                    remind_at = reminders.normalize_remind_at(remind_input.value)
+                except ValueError as exc:
+                    ui.notify(str(exc), type="negative")
+                    return
                 if note.get("id"):
-                    db.update_note(note["id"], title, body, tags)
+                    db.update_note(note["id"], title, body, tags, remind_at=remind_at)
                 else:
-                    db.create_note(title, body, tags)
+                    db.create_note(title, body, tags, remind_at=remind_at)
                 dialog.close()
                 render()
                 ui.notify("笔记已保存", type="positive")

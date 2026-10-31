@@ -13,7 +13,7 @@ import sys
 
 from nicegui import app, ui
 
-from core import db, runtime, settings, snapshots
+from core import db, reminders, runtime, settings, snapshots
 from core.approval import broker as approval_broker
 from core.approval import install_route
 from core.dsh_agent import dsh_agent
@@ -34,10 +34,12 @@ def _startup() -> None:
         snapshots.prune(days=7)
     except OSError:
         pass
+    reminders.start()
 
 
 @app.on_shutdown
 def _shutdown() -> None:
+    reminders.stop()
     try:
         dsh_agent.cancel()
     except Exception:  # noqa: BLE001 - 退出阶段不再抛错

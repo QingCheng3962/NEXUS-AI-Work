@@ -30,23 +30,37 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE TABLE IF NOT EXISTS notes (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    title       TEXT NOT NULL,
-    content     TEXT NOT NULL DEFAULT '',
-    tags        TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    title          TEXT NOT NULL,
+    content        TEXT NOT NULL DEFAULT '',
+    tags           TEXT NOT NULL DEFAULT '',
+    remind_at      TEXT NOT NULL DEFAULT '',
+    reminder_sent  INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    title          TEXT NOT NULL,
+    detail         TEXT NOT NULL DEFAULT '',
+    priority       TEXT NOT NULL DEFAULT 'normal',
+    done           INTEGER NOT NULL DEFAULT 0,
+    due            TEXT NOT NULL DEFAULT '',
+    remind_at      TEXT NOT NULL DEFAULT '',
+    reminder_sent  INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT NOT NULL,
+    done_at        TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS ai_providers (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    title       TEXT NOT NULL,
-    detail      TEXT NOT NULL DEFAULT '',
-    priority    TEXT NOT NULL DEFAULT 'normal',
-    done        INTEGER NOT NULL DEFAULT 0,
-    due         TEXT NOT NULL DEFAULT '',
+    name        TEXT NOT NULL,
+    base_url    TEXT NOT NULL DEFAULT '',
+    api_key     TEXT NOT NULL DEFAULT '',
+    model       TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL,
-    done_at     TEXT NOT NULL DEFAULT ''
+    updated_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS dsh_conversations (
@@ -89,18 +103,41 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    columns = {
+        row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def init_db() -> None:
     with _connect() as conn:
         conn.executescript(SCHEMA)
-        columns = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(dsh_conversations)").fetchall()
-        }
-        if "permission" not in columns:
-            conn.execute(
-                "ALTER TABLE dsh_conversations "
-                "ADD COLUMN permission TEXT NOT NULL DEFAULT 'read-only'"
-            )
+        _ensure_column(
+            conn,
+            "dsh_conversations",
+            "permission",
+            "TEXT NOT NULL DEFAULT 'read-only'",
+        )
+        # 兼容已经存在的任务 / 笔记数据库；新增提醒字段不会丢数据。
+        _ensure_column(conn, "tasks", "remind_at", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "tasks", "reminder_sent", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "notes", "remind_at", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "notes", "reminder_sent", "INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_reminder "
+            "ON tasks(reminder_sent, remind_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notes_reminder "
+            "ON notes(reminder_sent, remind_at)"
+        )
         _migrate_legacy_sessions(conn)
 
 
@@ -249,23 +286,46 @@ def get_note(note_id: int) -> dict[str, Any] | None:
         return _one(conn.execute("SELECT * FROM notes WHERE id = ?", (note_id,)).fetchone())
 
 
-def create_note(title: str, content: str = "", tags: str = "") -> int:
+def create_note(
+    title: str,
+    content: str = "",
+    tags: str = "",
+    remind_at: str = "",
+) -> int:
     now = _now()
     with _connect() as conn:
         cur = conn.execute(
-            """INSERT INTO notes (title, content, tags, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (title.strip() or "未命名笔记", content, tags.strip(), now, now),
+            """INSERT INTO notes
+               (title, content, tags, remind_at, reminder_sent, created_at, updated_at)
+               VALUES (?, ?, ?, ?, 0, ?, ?)""",
+            (title.strip() or "未命名笔记", content, tags.strip(), remind_at, now, now),
         )
         return int(cur.lastrowid)
 
 
-def update_note(note_id: int, title: str, content: str, tags: str) -> None:
+def update_note(
+    note_id: int,
+    title: str,
+    content: str,
+    tags: str,
+    remind_at: str = "",
+) -> None:
     with _connect() as conn:
         conn.execute(
-            """UPDATE notes SET title = ?, content = ?, tags = ?, updated_at = ?
+            """UPDATE notes
+               SET title = ?, content = ?, tags = ?, remind_at = ?,
+                   reminder_sent = CASE WHEN remind_at = ? THEN reminder_sent ELSE 0 END,
+                   updated_at = ?
                WHERE id = ?""",
-            (title.strip() or "未命名笔记", content, tags.strip(), _now(), note_id),
+            (
+                title.strip() or "未命名笔记",
+                content,
+                tags.strip(),
+                remind_at,
+                remind_at,
+                _now(),
+                note_id,
+            ),
         )
 
 
@@ -294,12 +354,19 @@ def list_tasks(status: str = "all") -> list[dict[str, Any]]:
     return _rows(rows)
 
 
-def create_task(title: str, priority: str = "normal", due: str = "", detail: str = "") -> int:
+def create_task(
+    title: str,
+    priority: str = "normal",
+    due: str = "",
+    detail: str = "",
+    remind_at: str = "",
+) -> int:
     with _connect() as conn:
         cur = conn.execute(
-            """INSERT INTO tasks (title, detail, priority, due, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (title.strip(), detail, priority, due, _now()),
+            """INSERT INTO tasks
+               (title, detail, priority, due, remind_at, reminder_sent, created_at)
+               VALUES (?, ?, ?, ?, ?, 0, ?)""",
+            (title.strip(), detail, priority, due, remind_at, _now()),
         )
         return int(cur.lastrowid)
 
@@ -320,6 +387,114 @@ def delete_task(task_id: int) -> None:
 def clear_done_tasks() -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM tasks WHERE done = 1")
+
+
+# --------------------------------------------------------------------------- #
+# 提醒
+# --------------------------------------------------------------------------- #
+def due_reminders(now: str | None = None) -> list[dict[str, Any]]:
+    """返回已经到点且尚未提醒的任务 / 笔记。"""
+    stamp = now or _now()
+    items: list[dict[str, Any]] = []
+    with _connect() as conn:
+        for row in conn.execute(
+            """SELECT id, title, remind_at FROM tasks
+               WHERE done = 0 AND reminder_sent = 0 AND remind_at != '' AND remind_at <= ?
+               ORDER BY remind_at ASC""",
+            (stamp,),
+        ).fetchall():
+            items.append({"kind": "task", **dict(row)})
+        for row in conn.execute(
+            """SELECT id, title, remind_at FROM notes
+               WHERE reminder_sent = 0 AND remind_at != '' AND remind_at <= ?
+               ORDER BY remind_at ASC""",
+            (stamp,),
+        ).fetchall():
+            items.append({"kind": "note", **dict(row)})
+    return items
+
+
+def mark_reminders_sent(items: list[dict[str, Any]]) -> None:
+    """把已经成功通知过的提醒标记为已发送，避免重复弹窗。"""
+    task_ids = [int(item["id"]) for item in items if item.get("kind") == "task"]
+    note_ids = [int(item["id"]) for item in items if item.get("kind") == "note"]
+    with _connect() as conn:
+        if task_ids:
+            conn.executemany(
+                "UPDATE tasks SET reminder_sent = 1 WHERE id = ?",
+                [(item_id,) for item_id in task_ids],
+            )
+        if note_ids:
+            conn.executemany(
+                "UPDATE notes SET reminder_sent = 1 WHERE id = ?",
+                [(item_id,) for item_id in note_ids],
+            )
+
+
+# --------------------------------------------------------------------------- #
+# AI 服务商
+# --------------------------------------------------------------------------- #
+def list_ai_providers() -> list[dict[str, Any]]:
+    with _connect() as conn:
+        return _rows(
+            conn.execute(
+                "SELECT * FROM ai_providers ORDER BY updated_at DESC, id DESC"
+            ).fetchall()
+        )
+
+
+def get_ai_provider(provider_id: int) -> dict[str, Any] | None:
+    with _connect() as conn:
+        return _one(
+            conn.execute(
+                "SELECT * FROM ai_providers WHERE id = ?", (provider_id,)
+            ).fetchone()
+        )
+
+
+def create_ai_provider(
+    name: str,
+    base_url: str,
+    api_key: str = "",
+    model: str = "",
+) -> int:
+    now = _now()
+    with _connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO ai_providers
+               (name, base_url, api_key, model, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (name.strip(), base_url.strip(), api_key.strip(), model.strip(), now, now),
+        )
+        return int(cur.lastrowid)
+
+
+def update_ai_provider(
+    provider_id: int,
+    name: str,
+    base_url: str,
+    api_key: str = "",
+    model: str = "",
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """UPDATE ai_providers
+               SET name = ?, base_url = ?, api_key = ?, model = ?, updated_at = ?
+               WHERE id = ?""",
+            (
+                name.strip(),
+                base_url.strip(),
+                api_key.strip(),
+                model.strip(),
+                _now(),
+                provider_id,
+            ),
+        )
+
+
+def delete_ai_provider(provider_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM ai_providers WHERE id = ?", (provider_id,))
 
 
 # --------------------------------------------------------------------------- #

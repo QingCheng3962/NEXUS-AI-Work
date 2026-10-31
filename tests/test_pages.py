@@ -48,11 +48,14 @@ async def test_tasks(user) -> None:
     await user.open("/tasks")
     await user.should_see("待办事项")
     await user.should_see("添加")
+    await user.should_see("提醒时间（可选）")
 
 
 async def test_settings(user) -> None:
     await user.open("/settings")
     await user.should_see("AI 连接")
+    await user.should_see("AI 服务商管理")
+    await user.should_see("添加服务商")
     await user.should_see("保存设置")
 
 

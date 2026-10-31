@@ -1,10 +1,10 @@
-"""待办页：任务增删改查与完成进度。"""
+"""待办页：任务增删改查、提醒与完成归档。"""
 
 from __future__ import annotations
 
 from nicegui import ui
 
-from core import db
+from core import db, reminders
 from ui.theme import empty_state, page_shell, panel
 
 PRIORITY_LABEL = {"high": "高", "normal": "中", "low": "低"}
@@ -16,6 +16,7 @@ FILTER_MAP = {"全部": "all", "进行中": "open", "已完成": "done"}
 def tasks_page() -> None:
     content = page_shell("待办事项", "管理优先级，把精力放在重要的地方", "tasks")
     state = {"filter": "all"}
+    delete_state: dict = {"task": None}
 
     with content:
         @ui.refreshable
@@ -48,6 +49,9 @@ def tasks_page() -> None:
                 due = ui.input(placeholder="截止日期").props(
                     "outlined dense type=date"
                 ).style("width:152px")
+                remind = ui.input(placeholder="提醒时间（可选）").props(
+                    "outlined dense type=datetime-local clearable"
+                ).style("width:202px")
                 ui.button("添加", icon="add", on_click=lambda: add_task()).props(
                     "unelevated no-caps"
                 ).classes("gradient-btn")
@@ -68,6 +72,36 @@ def tasks_page() -> None:
         @ui.refreshable
         def task_list() -> None:
             tasks = db.list_tasks(state["filter"])
+            open_tasks = [task for task in tasks if not task["done"]]
+            done_tasks = [task for task in tasks if task["done"]]
+
+            def render_task(task: dict) -> None:
+                with ui.element("div").classes(f"task-row{' done' if task['done'] else ''}"):
+                    with ui.element("div").classes("min-w-0").style("flex:1"):
+                        ui.label(task["title"]).classes("task-name")
+                        if task["detail"]:
+                            ui.label(task["detail"]).classes("dim").style("font-size:10.5px")
+                    if task["due"]:
+                        ui.label(f"截止 {task['due']}").classes("task-due")
+                    if task.get("remind_at"):
+                        with ui.element("div").classes("task-remind"):
+                            ui.icon("alarm")
+                            ui.label(reminders.display_value(task["remind_at"]))
+                    ui.label(PRIORITY_LABEL.get(task["priority"], "中")).classes(
+                        f"prio {task['priority']}"
+                    )
+                    if task["done"]:
+                        ui.button(
+                            "恢复", icon="undo", on_click=lambda t=task: set_done(t, False)
+                        ).props("flat dense no-caps").classes("task-action")
+                    else:
+                        ui.button(
+                            "完成", icon="check", on_click=lambda t=task: set_done(t, True)
+                        ).props("flat dense no-caps").classes("task-action complete")
+                    ui.button(
+                        "删除", icon="close", on_click=lambda t=task: ask_delete(t)
+                    ).props("flat dense no-caps").classes("task-action delete")
+
             with panel(
                 "任务清单",
                 "checklist",
@@ -80,26 +114,49 @@ def tasks_page() -> None:
                 if not tasks:
                     empty_state("task_alt", "这里还没有任务", "在上方输入框里添加第一条待办")
                     return
-                for task in tasks:
-                    with ui.element("div").classes(f"task-row{' done' if task['done'] else ''}"):
-                        ui.checkbox(
-                            value=bool(task["done"]),
-                            on_change=lambda e, t=task: toggle(t, bool(e.value)),
-                        ).props("dense size=sm")
-                        with ui.element("div").classes("min-w-0").style("flex:1"):
-                            ui.label(task["title"]).classes("task-name")
-                            if task["detail"]:
-                                ui.label(task["detail"]).classes("dim").style("font-size:10.5px")
-                        if task["due"]:
-                            ui.label(f"截止 {task['due']}").classes("task-due")
-                        ui.label(PRIORITY_LABEL.get(task["priority"], "中")).classes(
-                            f"prio {task['priority']}"
-                        )
-                        ui.button(
-                            icon="delete_outline", on_click=lambda t=task: remove(t)
-                        ).props("flat round dense size=sm").classes("icon-btn").tooltip("删除任务")
+                if state["filter"] == "done":
+                    for task in done_tasks:
+                        render_task(task)
+                    return
+                if open_tasks:
+                    for task in open_tasks:
+                        render_task(task)
+                else:
+                    empty_state("task_alt", "没有进行中的任务", "所有任务都已完成")
+                if state["filter"] == "all" and done_tasks:
+                    with ui.expansion(
+                        f"已完成 · {len(done_tasks)}",
+                        icon="task_alt",
+                    ).classes("done-expansion"):
+                        for task in done_tasks:
+                            render_task(task)
 
         task_list()
+
+    # 删除确认
+    with ui.dialog() as delete_dialog, ui.card().classes("glass").style(
+        "padding:20px 22px;min-width:340px"
+    ):
+        delete_title = ui.label("").style("font-size:14px;font-weight:700")
+        ui.label("删除后无法恢复，确定要继续吗？").classes("muted").style(
+            "font-size:11.5px;margin-top:5px"
+        )
+
+        def confirm_delete() -> None:
+            task = delete_state.get("task")
+            if task:
+                db.delete_task(task["id"])
+            delete_state["task"] = None
+            delete_dialog.close()
+            summary.refresh()
+            task_list.refresh()
+            ui.notify("任务已删除", type="positive")
+
+        with ui.row().classes("w-full justify-end gap-2").style("margin-top:16px"):
+            ui.button("取消", on_click=delete_dialog.close).props("flat no-caps")
+            ui.button("确认删除", icon="delete", on_click=confirm_delete).props(
+                "unelevated no-caps"
+            ).style("background:#e11d48;color:#fff")
 
     # -------------------------------------------------------------------- #
     def add_task() -> None:
@@ -107,9 +164,20 @@ def tasks_page() -> None:
         if not title:
             ui.notify("任务内容不能为空", type="warning")
             return
-        db.create_task(title, priority=priority.value or "normal", due=due.value or "")
+        try:
+            remind_at = reminders.normalize_remind_at(remind.value)
+        except ValueError as exc:
+            ui.notify(str(exc), type="negative")
+            return
+        db.create_task(
+            title,
+            priority=priority.value or "normal",
+            due=due.value or "",
+            remind_at=remind_at,
+        )
         task_input.value = ""
         due.value = ""
+        remind.value = ""
         summary.refresh()
         task_list.refresh()
         if state["filter"] == "done":
@@ -117,16 +185,15 @@ def tasks_page() -> None:
         else:
             ui.notify("任务已添加", type="positive")
 
-    def toggle(task: dict, done: bool) -> None:
+    def set_done(task: dict, done: bool) -> None:
         db.toggle_task(task["id"], done)
         summary.refresh()
         task_list.refresh()
 
-    def remove(task: dict) -> None:
-        db.delete_task(task["id"])
-        summary.refresh()
-        task_list.refresh()
-        ui.notify("任务已删除", type="positive")
+    def ask_delete(task: dict) -> None:
+        delete_state["task"] = task
+        delete_title.set_text(f"删除「{task['title'][:40]}」？")
+        delete_dialog.open()
 
     def clear_done() -> None:
         db.clear_done_tasks()

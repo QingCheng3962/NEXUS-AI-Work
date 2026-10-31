@@ -8,7 +8,7 @@ from typing import Callable
 
 from nicegui import ui
 
-from core import model_catalog, model_router, security, settings, system
+from core import ai_providers, model_catalog, model_router, security, settings, system
 
 REASONING_OPTIONS = {
     "默认": "",
@@ -351,6 +351,8 @@ class AISettingsDialog:
                     model_catalog.save_catalog(self.models, new_base, saved_key)
                 elif connection_changed:
                     model_catalog.clear_catalog()
+                # 手动修改连接后，取消已不匹配的服务商节点选中状态。
+                ai_providers.reconcile_active_provider()
                 if self.on_saved:
                     self.on_saved()
                 self.dialog.close()

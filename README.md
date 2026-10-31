@@ -25,11 +25,13 @@
 | **执行轨迹** | 工具调用、参数、输出和成败状态以可展开卡片显示 |
 | **文件快照与撤销** | 会修改文件的任务开始前自动保存工作区快照；结束后显示红绿 Diff，可「接受修改」或「撤销全部」 |
 | **文档导入** | 把 Word / PDF / Excel 拖进笔记页，提取正文并让 AI 生成摘要，保存为 Markdown 笔记 |
+| **多 AI 服务商** | 在设置页添加、编辑、删除多个 API 节点（名称 / Base URL / API Key / Model），主聊天下拉框手动切换；节点保存在 SQLite |
+| **任务与笔记提醒** | 新建任务或笔记时可选择提醒时间；后台异步检查，到点后在窗口右上角弹出 Notification |
 | **历史对话** | 左侧中部的小型 `>` 拉动按钮；打开后变为 `<`，点击可收回；按日期归档，支持搜索和继续 |
-| **可折叠侧边栏** | 收起为纯图标，状态持久化；包含 AI 工作、笔记、待办、设置 |
+| **可折叠侧边栏** | 展开 250px / 折叠 60px 纯图标，平滑过渡，状态持久化到 `config.json` |
 | **AI 设置** | Base URL、API Key、自动检测模型、调度角色、推理强度、工作区、DSH 已保存凭据 |
-| **知识笔记** | Markdown 笔记，标签、搜索、实时预览 |
-| **待办** | 优先级、截止日期、完成进度 |
+| **知识笔记** | Markdown 笔记，标签、搜索、实时预览、可选提醒 |
+| **待办** | 优先级、截止日期、提醒、完成归档；完成/删除按钮，删除二次确认 |
 | **本地优先** | 配置、对话、笔记和待办都在本机；API Key 不会上传到 Anvil 自己的服务器 |
 
 ---
@@ -218,7 +220,7 @@ dist\Anvil\data\              ← 首次运行后生成（配置、SQLite）
 | 内容 | 位置 |
 | --- | --- |
 | Anvil 配置 | `data/config.json`（源码运行：项目根目录；EXE：exe 同级 `data/`） |
-| 对话 / 笔记 / 待办 / DSH 会话索引 | `data/workstation.db`（SQLite） |
+| 对话 / 笔记 / 待办 / AI 服务商 / 提醒 / DSH 会话索引 | `data/workstation.db`（SQLite） |
 | DSH 会话与凭据 | `~/.dsh/`（与 DSH 桌面版共享） |
 | DSH 默认工作区 | `~/Anvil-Workspace`（可随时在设置中修改） |
 | DSH 审批插件与补丁 | `data/anvil_dsh_approval.mjs`、`data/dsh-headless.patch.yml` |
@@ -234,7 +236,9 @@ dist\Anvil\data\              ← 首次运行后生成（配置、SQLite）
 app.py                     应用入口（原生窗口 / 浏览器 / 打包区分）
 core/
   settings.py              JSON 配置、默认值与点号读写
-  db.py                    SQLite：DSH 会话/消息、笔记、待办、旧数据迁移
+  db.py                    SQLite：DSH 会话/消息、笔记、待办、AI 服务商、提醒与旧数据迁移
+  ai_providers.py          多 AI 服务商节点选择与 DSH 运行时同步
+  reminders.py             提醒时间解析、后台异步检查与右上角通知
   dsh_agent.py             DSH headless --json 驱动、会话延续、权限与凭据注入
   security.py              权限硬校验、工作区路径规范化与工具调用拦截
   model_catalog.py         从当前 API 的 /models 自动检测并缓存模型
